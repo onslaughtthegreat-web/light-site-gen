@@ -8,9 +8,9 @@ export default function AuthPage() {
 			{isAuthenticated ? (
 				<>
 					<p>Welcome, {user?.name}</p>
-					<button onClick={() => logout({ returnTo: window.location.origin })}>
-						Logout
-					</button>
+				<button onClick={() => logout({ logoutParams: { returnTo: window.location.origin } })}>
+					Logout
+				</button>
 				</>
 			) : (
 				<button onClick={() => loginWithRedirect()}>Login</button>

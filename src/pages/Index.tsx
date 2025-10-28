@@ -1,12 +1,26 @@
 import BaymaxChat from "@/components/BaymaxChat";
 import ThemeToggle from "@/components/ThemeToggle";
 import MatrixBackground from "@/components/MatrixBackground";
+import { useAuth0 } from "@auth0/auth0-react";
+import { Button } from "@/components/ui/button";
 
 const Index = () => {
+	const { user, logout } = useAuth0();
+
 	return (
 		<div className="min-h-screen bg-background relative overflow-hidden">
 			<MatrixBackground />
-			<div className="absolute top-6 right-6 z-50">
+			<div className="absolute top-6 right-6 z-50 flex items-center gap-3">
+				<div className="text-sm text-muted-foreground">
+					{user?.email}
+				</div>
+				<Button
+					variant="outline"
+					size="sm"
+					onClick={() => logout({ logoutParams: { returnTo: window.location.origin + '/auth' } })}
+				>
+					Logout
+				</Button>
 				<ThemeToggle />
 			</div>
 			<div className="relative z-10 p-3 md:p-4 lg:p-8 min-h-screen flex flex-col bg-background/80 backdrop-blur-sm">

@@ -1,0 +1,10 @@
+name = "baymax-worker"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+# Environment variables (set these in Cloudflare dashboard)
+# AUTH0_DOMAIN = "your-domain.auth0.com"
+# AUTH0_AUDIENCE = "https://your-domain.auth0.com/api/v2/"
+
+[observability]
+enabled = true

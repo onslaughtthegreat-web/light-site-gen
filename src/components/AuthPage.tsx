@@ -5,12 +5,21 @@ import MatrixBackground from "@/components/MatrixBackground";
 import { cn } from "@/lib/utils";
 
 const AuthPage = () => {
-	const { isLoading, loginWithRedirect } = useAuth0();
+	const { isLoading, loginWithRedirect, isAuthenticated } = useAuth0();
 	const [mode, setMode] = useState<"login" | "signup">("login");
+
+	// Redirect if already authenticated
+	React.useEffect(() => {
+		if (isAuthenticated) {
+			window.location.href = "/";
+		}
+	}, [isAuthenticated]);
 
 	const handleAuth = () => {
 		loginWithRedirect({
-			screen_hint: mode === "signup" ? "signup" : undefined,
+			authorizationParams: {
+				screen_hint: mode === "signup" ? "signup" : undefined,
+			},
 		});
 	};
 
