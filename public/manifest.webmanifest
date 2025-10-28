@@ -1,0 +1,22 @@
+{
+	"name": "Baymax",
+	"short_name": "Baymax",
+	"description": "Your smart AI assistant",
+	"start_url": "/",
+	"display": "standalone",
+	"orientation": "portrait",
+	"background_color": "#ffffff",
+	"theme_color": "#0d1117",
+	"icons": [
+		{
+			"src": "/pwa-192x192.png",
+			"sizes": "192x192",
+			"type": "image/png"
+		},
+		{
+			"src": "/pwa-512x512.png",
+			"sizes": "512x512",
+			"type": "image/png"
+		}
+	]
+}
