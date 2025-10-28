@@ -2,9 +2,16 @@ name = "baymax-worker"
 main = "src/index.ts"
 compatibility_date = "2024-01-01"
 
-# Environment variables (set these in Cloudflare dashboard)
+# REQUIRED: Set these environment variables in Cloudflare dashboard:
 # AUTH0_DOMAIN = "your-domain.auth0.com"
 # AUTH0_AUDIENCE = "https://your-domain.auth0.com/api/v2/"
+# GROQ_API_KEY = "your-groq-api-key"
+# VECTOR_API_URL = "your-vector-api-url"
+
+# Also bind your KV namespace:
+# [[kv_namespaces]]
+# binding = "CHAT_HISTORY_BAYMAX_PROXY"
+# id = "your-kv-namespace-id"
 
 [observability]
 enabled = true

@@ -1,8 +1,9 @@
 /// <reference types="@cloudflare/workers-types" />
-import jwt from "jsonwebtoken";
+import { jwtVerify, createRemoteJWKSet } from "jose";
 
 export interface Env {
-	ISSUER_SECRET: string;
+	AUTH0_DOMAIN: string;
+	AUTH0_AUDIENCE: string;
 	GROQ_API_KEY: string;
 	CHAT_HISTORY_BAYMAX_PROXY: KVNamespace;
 	VECTOR_API_URL: string;
@@ -30,8 +31,6 @@ interface GroqResponse {
 
 const MAX_HISTORY = 20;
 const HISTORY_TTL = 60 * 60 * 24 * 30;
-const TOKEN_EXPIRY = 5 * 60;
-const TOKEN_REFRESH_THRESHOLD = 60;
 
 function corsHeaders(origin?: string) {
 	const allowOrigin = origin ?? "*";
@@ -49,77 +48,80 @@ function jsonResponse(data: unknown, status = 200, origin?: string) {
 	});
 }
 
-function createToken(sessionId: string, secret: string) {
-	return jwt.sign({ sessionId }, secret, { expiresIn: `${TOKEN_EXPIRY}s` });
-}
-
-async function verifyJWT(token: string, secret: string) {
-	let decoded: any;
+async function verifyAuth0Token(token: string, env: Env) {
 	try {
-		decoded = jwt.verify(token, secret);
-	} catch {
-		throw new Response("Unauthorized: invalid token", { status: 401 });
+		const JWKS = createRemoteJWKSet(
+			new URL(`https://${env.AUTH0_DOMAIN}/.well-known/jwks.json`)
+		);
+
+		const { payload } = await jwtVerify(token, JWKS, {
+			issuer: `https://${env.AUTH0_DOMAIN}/`,
+			audience: env.AUTH0_AUDIENCE,
+		});
+
+		if (!payload.sub) {
+			throw new Error("No subject in token");
+		}
+
+		return {
+			userId: payload.sub as string,
+			email: payload.email as string | undefined,
+		};
+	} catch (error) {
+		console.error("JWT verification failed:", error);
+		throw new Response("Unauthorized: Invalid token", { status: 401 });
 	}
-	if (!decoded.sessionId)
-		throw new Response("Unauthorized: invalid token payload", { status: 401 });
-	return decoded.sessionId;
 }
 
 export default {
 	async fetch(request: Request, env: Env): Promise<Response> {
 		const origin = request.headers.get("Origin") || "";
-		const ALLOWED_ORIGIN = "https://baymax.onslaught2342.qzz.io";
-		if (origin !== ALLOWED_ORIGIN)
-			return new Response("Forbidden", { status: 403 });
-
-		const url = new URL(request.url);
-
-		if (url.pathname === "/token" && request.method === "GET") {
-			const sessionId = url.searchParams.get("sessionId");
-			if (!sessionId) return new Response("Missing sessionId", { status: 400 });
-			const token = createToken(sessionId, env.ISSUER_SECRET);
-			return jsonResponse({ token }, 200, origin);
-		}
 
 		if (request.method === "OPTIONS") {
 			return new Response(null, {
 				status: 204,
 				headers: {
 					...corsHeaders(origin),
-					"Access-Control-Allow-Credentials": "false",
+					"Access-Control-Allow-Credentials": "true",
 					"Access-Control-Max-Age": "86400",
 				},
 			});
 		}
 
+		const url = new URL(request.url);
+
+		// Health check endpoint (public)
+		if (url.pathname === "/health" && request.method === "GET") {
+			return jsonResponse({ status: "healthy", timestamp: Date.now() }, 200, origin);
+		}
+
+		// All other endpoints require Auth0 authentication
 		const authHeader = request.headers.get("Authorization") || "";
 		const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
-		if (!token)
-			return new Response("Unauthorized: missing token", { status: 401 });
+		if (!token) {
+			return jsonResponse(
+				{ error: "Unauthorized: missing token" },
+				401,
+				origin
+			);
+		}
 
-		let sessionId: string;
+		let userAuth: { userId: string; email?: string };
 		try {
-			sessionId = await verifyJWT(token, env.ISSUER_SECRET);
+			userAuth = await verifyAuth0Token(token, env);
 		} catch (err) {
 			return err instanceof Response
 				? err
-				: new Response("Unauthorized", { status: 401 });
+				: jsonResponse({ error: "Unauthorized" }, 401, origin);
 		}
 
-		let refreshToken: string | null = null;
-		const decoded: any = jwt.decode(token);
-		if (
-			decoded &&
-			decoded.exp &&
-			Date.now() / 1000 + TOKEN_REFRESH_THRESHOLD > decoded.exp
-		) {
-			refreshToken = createToken(sessionId, env.ISSUER_SECRET);
-		}
+		// Use userId as session identifier for consistent chat history per user
+		const sessionId = userAuth.userId;
 
 		if (url.pathname === "/clear" && request.method === "POST") {
 			await env.CHAT_HISTORY_BAYMAX_PROXY.delete(sessionId);
 			return jsonResponse(
-				{ success: true, message: "Session cleared", refreshToken },
+				{ success: true, message: "Session cleared" },
 				200,
 				origin
 			);
@@ -127,7 +129,7 @@ export default {
 
 		if (request.method !== "POST")
 			return jsonResponse(
-				{ error: "Only POST allowed", refreshToken },
+				{ error: "Only POST allowed" },
 				405,
 				origin
 			);
@@ -137,7 +139,7 @@ export default {
 		).toLowerCase();
 		if (!contentType.includes("application/json"))
 			return jsonResponse(
-				{ error: "Expected application/json", refreshToken },
+				{ error: "Expected application/json" },
 				415,
 				origin
 			);
@@ -147,7 +149,7 @@ export default {
 			body = await request.json();
 		} catch {
 			return jsonResponse(
-				{ error: "Invalid JSON body", refreshToken },
+				{ error: "Invalid JSON body" },
 				400,
 				origin
 			);
@@ -157,13 +159,13 @@ export default {
 			typeof body.userMessage === "string" ? body.userMessage.trim() : null;
 		if (!userMessage)
 			return jsonResponse(
-				{ error: "Missing userMessage", refreshToken },
+				{ error: "Missing userMessage" },
 				400,
 				origin
 			);
 		if (userMessage.length > 20000)
 			return jsonResponse(
-				{ error: "userMessage too long", refreshToken },
+				{ error: "userMessage too long" },
 				413,
 				origin
 			);
@@ -245,7 +247,6 @@ export default {
 					error: "Upstream model error",
 					upstreamStatus: groqRes.status,
 					detail: errText,
-					refreshToken,
 				},
 				502,
 				origin
@@ -285,7 +286,10 @@ export default {
 						hallucinationDetected: false,
 					},
 				},
-				refreshToken,
+				user: {
+					id: userAuth.userId,
+					email: userAuth.email,
+				},
 			},
 			200,
 			origin

@@ -6,10 +6,11 @@ import { cn } from "@/lib/utils";
 import {
 	sendMessageToBaymax,
 	clearBaymaxSession,
-	getSessionId,
+	setAuth0TokenGetter,
 } from "@/lib/groq-api";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { useAuth0 } from "@auth0/auth0-react";
 
 interface Message {
 	id: string;
@@ -24,6 +25,7 @@ interface BaymaxChatProps {
 }
 
 const BaymaxChat: React.FC<BaymaxChatProps> = ({ className, style }) => {
+	const { getAccessTokenSilently } = useAuth0();
 	const [messages, setMessages] = useState<Message[]>([
 		{
 			id: "1",
@@ -39,6 +41,13 @@ const BaymaxChat: React.FC<BaymaxChatProps> = ({ className, style }) => {
 	const scrollToBottom = () => {
 		messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
 	};
+
+	useEffect(() => {
+		// Initialize Auth0 token getter
+		setAuth0TokenGetter(async () => {
+			return await getAccessTokenSilently();
+		});
+	}, [getAccessTokenSilently]);
 
 	useEffect(() => {
 		scrollToBottom();
@@ -58,8 +67,7 @@ const BaymaxChat: React.FC<BaymaxChatProps> = ({ className, style }) => {
 			setIsLoading(true);
 
 			try {
-				const sessionId = getSessionId();
-				const success = await clearBaymaxSession(sessionId);
+				const success = await clearBaymaxSession();
 
 				setMessages([
 					{

@@ -7,5 +7,8 @@ export const auth0Config = {
   authorizationParams: {
     redirect_uri: typeof window !== 'undefined' ? window.location.origin : '',
     audience: import.meta.env.VITE_AUTH0_AUDIENCE || `https://YOUR_AUTH0_DOMAIN.auth0.com/api/v2/`,
-  }
+    scope: 'openid profile email', // Scopes needed for access token
+  },
+  cacheLocation: 'localstorage' as const, // Cache tokens for better UX
+  useRefreshTokens: true, // Enable refresh tokens for longer sessions
 };
