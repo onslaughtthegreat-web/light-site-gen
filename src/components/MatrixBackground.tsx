@@ -6,27 +6,31 @@ export default function MatrixBackground() {
 	useEffect(() => {
 		const canvas = canvasRef.current;
 		if (!canvas) return;
-
 		const ctx = canvas.getContext("2d");
 		if (!ctx) return;
+
+		const chars = "01".split("");
+		const fontSize = 14;
+		let columns = 0;
+		let drops: number[] = [];
 
 		const resizeCanvas = () => {
 			canvas.width = window.innerWidth;
 			canvas.height = window.innerHeight;
+			columns = Math.floor(canvas.width / fontSize);
+			drops = Array.from(
+				{ length: columns },
+				() => (Math.random() * canvas.height) / fontSize
+			);
 		};
 
 		resizeCanvas();
 		window.addEventListener("resize", resizeCanvas);
 
-		const chars = "01".split("");
-		const fontSize = 14;
-		const columns = Math.floor(canvas.width / fontSize);
-		const drops = Array.from({ length: columns }, () => 1);
-
 		const draw = () => {
-			ctx.fillStyle = "rgba(15, 23, 42, 0.05)";
+			ctx.fillStyle = "rgba(15, 23, 42, 0.05)"; // background fade
 			ctx.fillRect(0, 0, canvas.width, canvas.height);
-			ctx.fillStyle = "#0f0";
+			ctx.fillStyle = "#0f0"; // matrix green
 			ctx.font = fontSize + "px monospace";
 
 			for (let i = 0; i < drops.length; i++) {

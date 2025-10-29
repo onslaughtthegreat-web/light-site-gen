@@ -6,11 +6,10 @@ import { cn } from "@/lib/utils";
 import {
 	sendMessageToBaymax,
 	clearBaymaxSession,
-	setAuth0TokenGetter,
+	getSessionId,
 } from "@/lib/groq-api";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { useAuth0 } from "@auth0/auth0-react";
 
 interface Message {
 	id: string;
@@ -24,8 +23,9 @@ interface BaymaxChatProps {
 	style?: React.CSSProperties;
 }
 
+const STORAGE_KEY = "baymax_messages"; // LOCALSTORAGE
+
 const BaymaxChat: React.FC<BaymaxChatProps> = ({ className, style }) => {
-	const { getAccessTokenSilently } = useAuth0();
 	const [messages, setMessages] = useState<Message[]>([
 		{
 			id: "1",
@@ -35,23 +35,45 @@ const BaymaxChat: React.FC<BaymaxChatProps> = ({ className, style }) => {
 			timestamp: new Date(),
 		},
 	]);
+
+	// ✅ Load from localStorage after first render (client-side only)
+	useEffect(() => {
+		try {
+			const saved = localStorage.getItem(STORAGE_KEY);
+			if (saved) {
+				const parsed = JSON.parse(saved);
+				const restored = parsed.map((msg: any) => ({
+					...msg,
+					timestamp: new Date(msg.timestamp),
+				}));
+				setMessages(restored);
+			}
+		} catch (err) {
+			console.warn("Failed to load chat history:", err);
+		}
+	}, []);
+
 	const [inputValue, setInputValue] = useState("");
 	const [isLoading, setIsLoading] = useState(false);
 	const messagesEndRef = useRef<HTMLDivElement>(null);
+
 	const scrollToBottom = () => {
 		messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
 	};
 
 	useEffect(() => {
-		// Initialize Auth0 token getter
-		setAuth0TokenGetter(async () => {
-			return await getAccessTokenSilently();
-		});
-	}, [getAccessTokenSilently]);
-
-	useEffect(() => {
 		scrollToBottom();
 	}, [messages]);
+
+	// --- LOCALSTORAGE: Save messages on change ---
+	useEffect(() => {
+		try {
+			localStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
+		} catch (err) {
+			console.warn("Failed to save chat messages:", err);
+		}
+	}, [messages]);
+
 	const simulateGroqAPI = async (message: string): Promise<string> => {
 		await new Promise((resolve) =>
 			setTimeout(resolve, 1000 + Math.random() * 2000)
@@ -62,14 +84,16 @@ const BaymaxChat: React.FC<BaymaxChatProps> = ({ className, style }) => {
 	const sendMessage = async () => {
 		if (!inputValue.trim() || isLoading) return;
 		const trimmedInput = inputValue.trim();
+
 		if (trimmedInput.toLowerCase() === "clear") {
 			setInputValue("");
 			setIsLoading(true);
 
 			try {
-				const success = await clearBaymaxSession();
+				const sessionId = getSessionId();
+				const success = await clearBaymaxSession(sessionId);
 
-				setMessages([
+				const cleared = [
 					{
 						id: "1",
 						content: success
@@ -78,7 +102,13 @@ const BaymaxChat: React.FC<BaymaxChatProps> = ({ className, style }) => {
 						sender: "bot",
 						timestamp: new Date(),
 					},
-				]);
+				];
+
+				setMessages(cleared);
+
+				// --- LOCALSTORAGE: Clear messages ---
+				localStorage.removeItem(STORAGE_KEY);
+				localStorage.setItem(STORAGE_KEY, JSON.stringify(cleared));
 			} catch (error) {
 				console.error("Error clearing chat:", error);
 			} finally {
@@ -140,6 +170,7 @@ const BaymaxChat: React.FC<BaymaxChatProps> = ({ className, style }) => {
 			)}
 			style={style}
 		>
+			{/* HEADER */}
 			<div className="flex items-center gap-2 md:gap-3 p-3 md:p-6 bg-card/30 border-b border-border/50 backdrop-blur-sm relative">
 				<div className="absolute inset-0 bg-gradient-to-r from-primary/5 to-primary-glow/5" />
 				<div className="relative flex items-center gap-2 md:gap-3">
@@ -163,6 +194,7 @@ const BaymaxChat: React.FC<BaymaxChatProps> = ({ className, style }) => {
 				</div>
 			</div>
 
+			{/* CHAT BODY */}
 			<div className="flex-1 overflow-y-auto p-3 md:p-6 space-y-3 md:space-y-4 bg-gradient-to-b from-transparent to-background/20">
 				{messages.map((message, index) => (
 					<div
@@ -193,15 +225,10 @@ const BaymaxChat: React.FC<BaymaxChatProps> = ({ className, style }) => {
 						>
 							<div
 								className={cn(
-									"prose prose-sm max-w-none prose-invert",
+									"prose prose-sm max-w-none prose-invert break-words",
 									message.sender === "user"
-										? "prose-headings:text-chat-user-foreground prose-p:text-chat-user-foreground prose-strong:text-chat-user-foreground prose-li:text-chat-user-foreground"
-										: "prose-headings:text-chat-bot-foreground prose-p:text-chat-bot-foreground prose-strong:text-chat-bot-foreground prose-li:text-chat-bot-foreground",
-									"prose-headings:text-sm md:prose-headings:text-base prose-headings:font-semibold prose-headings:mb-1 md:prose-headings:mb-2 prose-headings:mt-2 md:prose-headings:mt-4 first:prose-headings:mt-0",
-									"prose-p:my-1 md:prose-p:my-2 prose-p:leading-relaxed prose-p:text-sm md:prose-p:text-base",
-									"prose-ul:my-1 md:prose-ul:my-2 prose-ol:my-1 md:prose-ol:my-2 prose-li:my-0.5 md:prose-li:my-1 prose-li:text-sm md:prose-li:text-base",
-									"prose-strong:font-semibold prose-strong:text-sm md:prose-strong:text-base",
-									"break-words"
+										? "prose-headings:text-chat-user-foreground prose-p:text-chat-user-foreground"
+										: "prose-headings:text-chat-bot-foreground prose-p:text-chat-bot-foreground"
 								)}
 							>
 								<ReactMarkdown remarkPlugins={[remarkGfm]}>
@@ -263,6 +290,8 @@ const BaymaxChat: React.FC<BaymaxChatProps> = ({ className, style }) => {
 
 				<div ref={messagesEndRef} />
 			</div>
+
+			{/* INPUT AREA */}
 			<div className="p-3 md:p-6 bg-card/20 border-t border-border/50 backdrop-blur-xl relative">
 				<div className="absolute inset-0 bg-gradient-to-t from-primary/5 to-transparent" />
 				<div className="relative flex gap-2 md:gap-3 items-end">
