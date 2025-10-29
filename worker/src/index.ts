@@ -180,35 +180,20 @@ export default {
 				if (!token) return jsonResponse({ error: 'Unauthorized: missing token' }, 401, request);
 				const username = await verifyJWT(token, env);
 				if (request.method === 'GET') {
-					// Get all session IDs for this user
-					const listKey = `${username}_histories`;
-					const data = await env.CHAT_HISTORY_BAYMAX_PROXY.get(listKey);
-					const sessionIds = data ? JSON.parse(data) : [];
+					// Get user's single session
+					const sessionId = `session_${username}`;
+					const sessionData = await env.CHAT_HISTORY_BAYMAX_PROXY.get(sessionId);
 					
-					// Aggregate all messages from all sessions
-					const allMessages: Array<{ role: string; content: string }> = [];
-					for (const sessionId of sessionIds) {
-						const sessionData = await env.CHAT_HISTORY_BAYMAX_PROXY.get(sessionId);
-						if (sessionData) {
-							const messages = JSON.parse(sessionData);
-							// Filter out system messages and add user/assistant pairs
-							const userMessages = messages.filter((m: any) => m.role !== 'system');
-							allMessages.push(...userMessages);
-						}
+					if (!sessionData) {
+						return jsonResponse([], 200, request);
 					}
 					
+					const messages = JSON.parse(sessionData);
+					// Filter out system messages
+					const userMessages = messages.filter((m: any) => m.role !== 'system');
+					
 					// Return normalized format for frontend
-					return jsonResponse(allMessages, 200, request);
-				}
-				if (request.method === 'POST') {
-					const body = await parseJsonLimited(request).catch(() => null);
-					if (!body || !body.sessionId) return jsonResponse({ error: 'Invalid JSON' }, 400, request);
-					const listKey = `${username}_histories`;
-					const data = await env.CHAT_HISTORY_BAYMAX_PROXY.get(listKey);
-					const histories = data ? JSON.parse(data) : [];
-					if (!histories.includes(body.sessionId)) histories.push(body.sessionId);
-					await env.CHAT_HISTORY_BAYMAX_PROXY.put(listKey, JSON.stringify(histories), { expirationTtl: HISTORY_TTL });
-					return jsonResponse({ ok: true }, 200, request);
+					return jsonResponse(userMessages, 200, request);
 				}
 				return jsonResponse({ error: 'Method not allowed' }, 405, request);
 			}
@@ -218,19 +203,9 @@ export default {
 				if (!token) return jsonResponse({ error: 'Unauthorized: missing token' }, 401, request);
 				const username = await verifyJWT(token, env);
 				if (request.method === 'POST') {
-					const body = await parseJsonLimited(request).catch(() => null);
-					if (!body || !body.sessionId) return jsonResponse({ error: 'Invalid JSON' }, 400, request);
-					
-					// Clear the session data
-					await env.CHAT_HISTORY_BAYMAX_PROXY.delete(body.sessionId);
-					await env.CHAT_HISTORY_BAYMAX_PROXY.delete(`${body.sessionId}_owner`);
-					
-					// Remove from user's history list
-					const listKey = `${username}_histories`;
-					const data = await env.CHAT_HISTORY_BAYMAX_PROXY.get(listKey);
-					let histories = data ? JSON.parse(data) : [];
-					histories = histories.filter((id: string) => id !== body.sessionId);
-					await env.CHAT_HISTORY_BAYMAX_PROXY.put(listKey, JSON.stringify(histories), { expirationTtl: HISTORY_TTL });
+					// Clear user's single session
+					const sessionId = `session_${username}`;
+					await env.CHAT_HISTORY_BAYMAX_PROXY.delete(sessionId);
 					
 					return jsonResponse({ success: true }, 200, request);
 				}
@@ -252,96 +227,22 @@ export default {
 			const userMessage = typeof body.userMessage === 'string' ? body.userMessage.trim() : null;
 			if (!userMessage) return jsonResponse({ error: 'Missing userMessage', refreshToken }, 400, request);
 			if (userMessage.length > 20000) return jsonResponse({ error: 'userMessage too long', refreshToken }, 413, request);
-			const sessionId = body.sessionId;
-			if (!sessionId || typeof sessionId !== 'string' || sessionId.length > 256) {
-				return jsonResponse({ error: 'Missing or invalid sessionId', refreshToken }, 400, request);
-			}
+			
+			// Use username as the session identifier - one session per user
+			const sessionId = `session_${username}`;
 			const sanitizedInput = userMessage.replace(/\s+/g, ' ').trim();
-			const ownerKey = `${sessionId}_owner`;
-			const owner = await env.CHAT_HISTORY_BAYMAX_PROXY.get(ownerKey);
-			if (owner && owner !== username) return jsonResponse({ error: 'Unauthorized access to history' }, 403, request);
-			if (!owner) await env.CHAT_HISTORY_BAYMAX_PROXY.put(ownerKey, username, { expirationTtl: HISTORY_TTL });
+			
+			// Get user's history - no need for ownership check, it's their username
 			const historyRaw = await env.CHAT_HISTORY_BAYMAX_PROXY.get(sessionId);
 			let history: Array<{ role: string; content: string }> = historyRaw
 				? JSON.parse(historyRaw)
 				: [{ role: 'system', content: 'You are Baymax, a friendly medical AI giving safe health advice.' }];
-			history.push({ role: 'user', content: sanitizedInput });
-			const systemMessage = history.find((m) => m.role === 'system') ?? null;
-			const nonSystem = history.filter((m) => m.role !== 'system').slice(-(MAX_HISTORY - (systemMessage ? 1 : 0)));
-			history = systemMessage ? [systemMessage, ...nonSystem] : nonSystem;
-			let context = '';
-			let embeddings: any[] = [];
-			try {
-				const vectorRes = await fetchWithTimeout(
-					env.VECTOR_API_URL,
-					{
-						method: 'POST',
-						headers: { 'Content-Type': 'application/json' },
-						body: JSON.stringify({ query: sanitizedInput }),
-					},
-					4000
-				);
-				if (vectorRes && vectorRes.ok) {
-					const vectorData = (await vectorRes.json().catch(() => null)) as VectorResponse | null;
-					if (vectorData?.results?.length) {
-						context = vectorData.results
-							.map((r) => {
-								const name = r['Medicine Name'] ?? 'Unknown';
-								const use = r['Uses'] ?? 'N/A';
-								const side = r['Side_effects'] ?? 'None listed';
-								return `• ${name}: Used for ${use}. Side effects: ${side}`;
-							})
-							.join('\n');
-						embeddings = vectorData.results;
-					}
-				}
-			} catch (err) {
-				context = '';
-			}
-			if (context) {
-				history.unshift({
-					role: 'system',
-					content: `Medical database context:\n${context}\n\nRespond as Baymax, using this data carefully.`,
-				});
-			}
-			const groqPayload = { model: 'llama-3.1-8b-instant', messages: history, temperature: 0.7 };
-			const startTime = Date.now();
-			const groqRes = await fetchWithTimeout(
-				'https://api.groq.com/openai/v1/chat/completions',
-				{
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.GROQ_API_KEY}` },
-					body: JSON.stringify(groqPayload),
-				},
-				12000
-			);
-			const latency = Date.now() - startTime;
-			if (!groqRes || !groqRes.ok) {
-				const errText = groqRes ? await groqRes.text().catch(() => '<no-body>') : '<no-response>';
-				return jsonResponse(
-					{ error: 'Upstream model error', upstreamStatus: groqRes?.status ?? 0, detail: errText, refreshToken },
-					502,
-					request
-				);
-			}
-			const data = (await groqRes.json().catch(() => null)) as GroqResponse | null;
-			const rawReply =
-				data?.choices?.[0]?.message?.content ??
-				data?.choices?.[0]?.text ??
-				(typeof data?.reply === 'string' ? data.reply : null) ??
-				'Model returned no reply';
+...
 			const refinedReply = typeof rawReply === 'string' ? rawReply.trim() : String(rawReply);
 			history.push({ role: 'assistant', content: refinedReply });
-			await env.CHAT_HISTORY_BAYMAX_PROXY.put(sessionId, JSON.stringify(history), { expirationTtl: HISTORY_TTL });
 			
-			// Track this session in user's history list
-			const listKey = `${username}_histories`;
-			const data = await env.CHAT_HISTORY_BAYMAX_PROXY.get(listKey);
-			const histories = data ? JSON.parse(data) : [];
-			if (!histories.includes(sessionId)) {
-				histories.push(sessionId);
-				await env.CHAT_HISTORY_BAYMAX_PROXY.put(listKey, JSON.stringify(histories), { expirationTtl: HISTORY_TTL });
-			}
+			// Save user's single session
+			await env.CHAT_HISTORY_BAYMAX_PROXY.put(sessionId, JSON.stringify(history), { expirationTtl: HISTORY_TTL })
 			
 			return jsonResponse(
 				{

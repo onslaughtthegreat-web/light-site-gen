@@ -21,36 +21,7 @@ if (typeof globalValue === "string") {
 	BAYMAX_ENDPOINT = "0.0.0.0"; // fallback
 }
 
-function generateUUIDFallback(): string {
-	const arr = new Uint8Array(16);
-	crypto.getRandomValues(arr);
-	arr[6] = (arr[6] & 0x0f) | 0x40;
-	arr[8] = (arr[8] & 0x3f) | 0x80;
-	const hex = Array.from(arr)
-		.map((b) => b.toString(16).padStart(2, "0"))
-		.join("");
-	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(
-		12,
-		16
-	)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
 
-export function getSessionId(): string {
-	try {
-		const key = "baymax_session_id";
-		let id = sessionStorage.getItem(key);
-		if (!id) {
-			id =
-				typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-					? crypto.randomUUID()
-					: generateUUIDFallback();
-			sessionStorage.setItem(key, id);
-		}
-		return id;
-	} catch {
-		return "s_" + Math.random().toString(36).slice(2, 10);
-	}
-}
 
 async function hashPassword(password: string): Promise<string> {
 	const encoder = new TextEncoder();
@@ -220,12 +191,11 @@ interface WorkerResponseShape {
 }
 
 export async function sendMessageToBaymax(message: string): Promise<string> {
-	const sessionId = getSessionId();
 	const token = getToken();
 
 	if (!token) throw new Error("User not logged in");
 
-	const payload = { sessionId, userMessage: message };
+	const payload = { userMessage: message };
 
 	try {
 		const res = await fetch(BAYMAX_ENDPOINT, {
@@ -286,7 +256,7 @@ export async function sendMessageToBaymax(message: string): Promise<string> {
 // ------------------------
 // Session Clear
 // ------------------------
-export async function clearBaymaxSession(sessionId: string): Promise<boolean> {
+export async function clearBaymaxSession(): Promise<boolean> {
 	const token = getToken();
 	if (!token) throw new Error("User not logged in");
 	const endpoint = `${BAYMAX_ENDPOINT.replace(/\/$/, "")}/clear`;
@@ -298,7 +268,6 @@ export async function clearBaymaxSession(sessionId: string): Promise<boolean> {
 				"Content-Type": "application/json",
 				Authorization: `Bearer ${token}`,
 			},
-			body: JSON.stringify({ sessionId }),
 		});
 
 		if (!res.ok) return false;

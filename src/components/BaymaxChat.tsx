@@ -6,7 +6,6 @@ import { cn } from "@/lib/utils";
 import {
 	sendMessageToBaymax,
 	clearBaymaxSession,
-	getSessionId,
 } from "@/lib/groq-api";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -110,8 +109,7 @@ const BaymaxChat: React.FC<BaymaxChatProps> = ({ className, style }) => {
 			setIsLoading(true);
 
 			try {
-				const sessionId = getSessionId();
-				const success = await clearBaymaxSession(sessionId);
+				const success = await clearBaymaxSession();
 
 				const cleared: Message[] = [
 					{
