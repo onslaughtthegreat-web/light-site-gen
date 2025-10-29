@@ -112,7 +112,8 @@ export default {
 			}
 			const url = new URL(request.url);
 			const path = url.pathname;
-			if (!ALLOWED_ORIGINS.includes(origin)) {
+			// Allow requests from allowed origins or localhost during development
+			if (!ALLOWED_ORIGINS.includes(origin) && !origin.includes('localhost') && !origin.includes('lovableproject.com')) {
 				return jsonResponse({ error: 'Forbidden origin' }, 403, request);
 			}
 			if (path === '/signup' && request.method === 'POST') {
@@ -237,12 +238,23 @@ export default {
 			let history: Array<{ role: string; content: string }> = historyRaw
 				? JSON.parse(historyRaw)
 				: [{ role: 'system', content: 'You are Baymax, a friendly medical AI giving safe health advice.' }];
+			
+			if (!Array.isArray(history)) {
+				history = [{ role: 'system', content: 'You are Baymax, a friendly medical AI giving safe health advice.' }];
+			}
 ...
 			const refinedReply = typeof rawReply === 'string' ? rawReply.trim() : String(rawReply);
 			history.push({ role: 'assistant', content: refinedReply });
 			
+			// Keep history under MAX_HISTORY (keep system message + last messages)
+			if (history.length > MAX_HISTORY) {
+				const systemMsg = history.find(m => m.role === 'system');
+				const recentMessages = history.slice(-(MAX_HISTORY - 1));
+				history = systemMsg ? [systemMsg, ...recentMessages.filter(m => m.role !== 'system')] : recentMessages;
+			}
+			
 			// Save user's single session
-			await env.CHAT_HISTORY_BAYMAX_PROXY.put(sessionId, JSON.stringify(history), { expirationTtl: HISTORY_TTL })
+			await env.CHAT_HISTORY_BAYMAX_PROXY.put(sessionId, JSON.stringify(history), { expirationTtl: HISTORY_TTL });
 			
 			return jsonResponse(
 				{
@@ -257,7 +269,11 @@ export default {
 		} catch (err: any) {
 			if (err instanceof Response) return err;
 			console.error('Unhandled worker error:', err);
-			return jsonResponse({ error: err.message ?? 'Internal Server Error' }, 500);
+			const origin = request?.headers.get('Origin') || '';
+			return new Response(JSON.stringify({ error: err.message ?? 'Internal Server Error' }), {
+				status: 500,
+				headers: { 'Content-Type': 'application/json', ...corsHeaders(origin) },
+			});
 		}
 	},
 };
