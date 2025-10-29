@@ -36,21 +36,41 @@ const BaymaxChat: React.FC<BaymaxChatProps> = ({ className, style }) => {
 		},
 	]);
 
-	// ✅ Load from localStorage after first render (client-side only)
+	// ✅ Load from localStorage AND fetch from server
 	useEffect(() => {
-		try {
-			const saved = localStorage.getItem(STORAGE_KEY);
-			if (saved) {
-				const parsed = JSON.parse(saved);
-				const restored = parsed.map((msg: any) => ({
-					...msg,
-					timestamp: new Date(msg.timestamp),
-				}));
-				setMessages(restored);
+		const loadHistory = async () => {
+			try {
+				// First try localStorage
+				const saved = localStorage.getItem(STORAGE_KEY);
+				if (saved) {
+					const parsed = JSON.parse(saved);
+					const restored = parsed.map((msg: any) => ({
+						...msg,
+						timestamp: new Date(msg.timestamp),
+					}));
+					setMessages(restored);
+				}
+
+				// Then fetch from server to sync
+				const { fetchUserHistory } = await import("@/lib/groq-api");
+				await fetchUserHistory();
+				
+				// Reload from localStorage after server sync
+				const updated = localStorage.getItem(STORAGE_KEY);
+				if (updated) {
+					const parsed = JSON.parse(updated);
+					const restored = parsed.map((msg: any) => ({
+						...msg,
+						timestamp: new Date(msg.timestamp),
+					}));
+					setMessages(restored);
+				}
+			} catch (err) {
+				console.warn("Failed to load chat history:", err);
 			}
-		} catch (err) {
-			console.warn("Failed to load chat history:", err);
-		}
+		};
+
+		loadHistory();
 	}, []);
 
 	const [inputValue, setInputValue] = useState("");
@@ -93,13 +113,13 @@ const BaymaxChat: React.FC<BaymaxChatProps> = ({ className, style }) => {
 				const sessionId = getSessionId();
 				const success = await clearBaymaxSession(sessionId);
 
-				const cleared = [
+				const cleared: Message[] = [
 					{
 						id: "1",
 						content: success
 							? "Chat history cleared. How can I help you today?"
 							: "Chat cleared locally. How can I help you today?",
-						sender: "bot",
+						sender: "bot" as const,
 						timestamp: new Date(),
 					},
 				];

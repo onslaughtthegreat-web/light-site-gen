@@ -65,7 +65,10 @@ export async function fetchUserHistory(): Promise<
 	{ role: string; content: string }[]
 > {
 	const token = getToken();
-	if (!token) throw new Error("User not logged in");
+	if (!token) {
+		console.warn("No token found for history fetch");
+		return [];
+	}
 
 	const endpoint = `${BAYMAX_ENDPOINT.replace(/\/$/, "")}/history`;
 
@@ -80,29 +83,26 @@ export async function fetchUserHistory(): Promise<
 
 		if (!res.ok) {
 			const text = await res.text();
+			console.error("History fetch failed:", res.status, text);
 			throw new Error(`Failed to fetch history: ${text}`);
 		}
 
-		let data = await res.json();
+		const data = await res.json();
 
-		// --- Normalize to BaymaxChat format ---
-		// Example conversion if backend returns [{ prompt, response }]
-		const normalized = Array.isArray(data)
-			? data.flatMap((item: any) => [
-					{
-						role: "user",
-						content: item.prompt || item.user || item.input || "",
-					},
-					{
-						role: "assistant",
-						content: item.response || item.bot || item.output || "",
-					},
-			  ])
-			: [];
+		// Worker now returns normalized format already
+		const normalized = Array.isArray(data) ? data : [];
 
-		// --- Store in localStorage ---
+		// Convert to Message format for BaymaxChat
+		const messages = normalized.map((item: any, index: number) => ({
+			id: `history-${index}`,
+			content: item.content || "",
+			sender: item.role === "user" ? "user" : "bot",
+			timestamp: new Date(),
+		}));
+
+		// Store in localStorage
 		try {
-			localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
+			localStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
 		} catch (err) {
 			console.warn("Failed to store history in localStorage:", err);
 		}
@@ -115,7 +115,12 @@ export async function fetchUserHistory(): Promise<
 		const cached = localStorage.getItem(STORAGE_KEY);
 		if (cached) {
 			try {
-				return JSON.parse(cached);
+				const parsed = JSON.parse(cached);
+				// Convert back to role/content format
+				return parsed.map((msg: any) => ({
+					role: msg.sender === "user" ? "user" : "assistant",
+					content: msg.content,
+				}));
 			} catch {
 				return [];
 			}

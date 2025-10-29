@@ -30,7 +30,7 @@ const Index = () => {
 	}
 
 	if (!loggedIn) {
-		return <AuthPage onLogin={() => setLoggedIn(true)} />;
+		return <AuthPage />;
 	}
 
 	// 🧠 When logged in, show BaymaxChat + Logout + ThemeToggle

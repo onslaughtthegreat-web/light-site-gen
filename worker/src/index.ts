@@ -180,10 +180,25 @@ export default {
 				if (!token) return jsonResponse({ error: 'Unauthorized: missing token' }, 401, request);
 				const username = await verifyJWT(token, env);
 				if (request.method === 'GET') {
+					// Get all session IDs for this user
 					const listKey = `${username}_histories`;
 					const data = await env.CHAT_HISTORY_BAYMAX_PROXY.get(listKey);
-					const histories = data ? JSON.parse(data) : [];
-					return jsonResponse({ histories }, 200, request);
+					const sessionIds = data ? JSON.parse(data) : [];
+					
+					// Aggregate all messages from all sessions
+					const allMessages: Array<{ role: string; content: string }> = [];
+					for (const sessionId of sessionIds) {
+						const sessionData = await env.CHAT_HISTORY_BAYMAX_PROXY.get(sessionId);
+						if (sessionData) {
+							const messages = JSON.parse(sessionData);
+							// Filter out system messages and add user/assistant pairs
+							const userMessages = messages.filter((m: any) => m.role !== 'system');
+							allMessages.push(...userMessages);
+						}
+					}
+					
+					// Return normalized format for frontend
+					return jsonResponse(allMessages, 200, request);
 				}
 				if (request.method === 'POST') {
 					const body = await parseJsonLimited(request).catch(() => null);
@@ -194,6 +209,30 @@ export default {
 					if (!histories.includes(body.sessionId)) histories.push(body.sessionId);
 					await env.CHAT_HISTORY_BAYMAX_PROXY.put(listKey, JSON.stringify(histories), { expirationTtl: HISTORY_TTL });
 					return jsonResponse({ ok: true }, 200, request);
+				}
+				return jsonResponse({ error: 'Method not allowed' }, 405, request);
+			}
+			if (path === '/clear') {
+				const authHeader = request.headers.get('Authorization') || '';
+				const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+				if (!token) return jsonResponse({ error: 'Unauthorized: missing token' }, 401, request);
+				const username = await verifyJWT(token, env);
+				if (request.method === 'POST') {
+					const body = await parseJsonLimited(request).catch(() => null);
+					if (!body || !body.sessionId) return jsonResponse({ error: 'Invalid JSON' }, 400, request);
+					
+					// Clear the session data
+					await env.CHAT_HISTORY_BAYMAX_PROXY.delete(body.sessionId);
+					await env.CHAT_HISTORY_BAYMAX_PROXY.delete(`${body.sessionId}_owner`);
+					
+					// Remove from user's history list
+					const listKey = `${username}_histories`;
+					const data = await env.CHAT_HISTORY_BAYMAX_PROXY.get(listKey);
+					let histories = data ? JSON.parse(data) : [];
+					histories = histories.filter((id: string) => id !== body.sessionId);
+					await env.CHAT_HISTORY_BAYMAX_PROXY.put(listKey, JSON.stringify(histories), { expirationTtl: HISTORY_TTL });
+					
+					return jsonResponse({ success: true }, 200, request);
 				}
 				return jsonResponse({ error: 'Method not allowed' }, 405, request);
 			}
@@ -294,6 +333,16 @@ export default {
 			const refinedReply = typeof rawReply === 'string' ? rawReply.trim() : String(rawReply);
 			history.push({ role: 'assistant', content: refinedReply });
 			await env.CHAT_HISTORY_BAYMAX_PROXY.put(sessionId, JSON.stringify(history), { expirationTtl: HISTORY_TTL });
+			
+			// Track this session in user's history list
+			const listKey = `${username}_histories`;
+			const data = await env.CHAT_HISTORY_BAYMAX_PROXY.get(listKey);
+			const histories = data ? JSON.parse(data) : [];
+			if (!histories.includes(sessionId)) {
+				histories.push(sessionId);
+				await env.CHAT_HISTORY_BAYMAX_PROXY.put(listKey, JSON.stringify(histories), { expirationTtl: HISTORY_TTL });
+			}
+			
 			return jsonResponse(
 				{
 					input: { original: userMessage, sanitized: sanitizedInput, embeddings },
